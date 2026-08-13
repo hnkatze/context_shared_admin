@@ -38,10 +38,22 @@ linter, and no formatter configured — do not claim a test or lint pass, there 
 Neither gate touches the database, so any change to `db.ts` or to a page's query needs the dev
 server hit and the rendered output inspected before it counts as working.
 
-## Local development database
+## Development database — READ THIS FIRST
 
-`.env` points at a **local throwaway Postgres in Docker** (`localhost:55432`, container `ctxpg`),
-not at Supabase. It is brought up by `scripts/dev-up.sh` **in the other repo**
+**`.env` currently points at PRODUCTION Supabase**, not at the local Docker Postgres. Check
+before running anything that writes:
+
+```bash
+grep -o 'CONTEXT_SHARED_DATABASE_URL=postgresql://[^:]*' .env   # the role
+grep -o '@[^/]*' .env | head -1                                 # the host
+```
+
+A `pooler.supabase.com` host means production: real cards, the real API key, real consequences.
+The connection role is `context_app` there (not `mcp_app`), and it has neither `BYPASSRLS` nor
+superuser, so RLS is genuinely enforced — but a stray `delete` is still a stray delete.
+
+The alternative is a **local throwaway Postgres in Docker** (`localhost:55432`, container
+`ctxpg`). It is brought up by `scripts/dev-up.sh` **in the other repo**
 (`C:\Users\henri\personal\context-shared`), which recreates the database, applies
 `supabase/migrations/0001_init.sql`, loads `supabase/seed/dev_seed.sql`, and prints the two env
 values the panel expects.
