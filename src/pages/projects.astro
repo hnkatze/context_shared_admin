@@ -1,0 +1,262 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { panelOrgId, withTenant } from '../lib/db';
+import {
+  MAX_PROJECT_NAME_LENGTH,
+  findNearDuplicates,
+  renameProject,
+  type NearDuplicatePair,
+} from '../lib/projects';
+
+type ProjectRow = { slug: string; name: string; card_count: string; created_at: Date };
+
+/** FormData yields `string | File`; a File reaching here is a forged request, not our form. */
+function textField(form: FormData, key: string): string | null {
+  const value = form.get(key);
+  return typeof value === 'string' ? value : null;
+}
+
+const describe = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+function pairReason(pair: NearDuplicatePair): string {
+  if (pair.reason === 'skeleton') return 'identical apart from punctuation';
+  return pair.distance === 1 ? '1 character apart' : `${pair.distance} characters apart`;
+}
+
+let failure: string | null = null;
+let formError: string | null = null;
+let projects: ProjectRow[] = [];
+let editSlug = (Astro.url.searchParams.get('edit') ?? '').trim();
+
+// Resolved once per request and reused by the rename and the listing.
+let orgId: string | null = null;
+try {
+  orgId = await panelOrgId();
+} catch (error) {
+  failure = describe(error);
+}
+
+if (orgId !== null && Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const slug = textField(form, 'slug');
+  const name = textField(form, 'name');
+
+  if (slug === null || name === null) {
+    formError = 'Both fields must be submitted as text.';
+    editSlug = '';
+  } else {
+    const result = await renameProject(orgId, slug, name);
+    switch (result.status) {
+      // Redirect on success so a refresh re-reads the row instead of resubmitting it.
+      case 'renamed':
+        return Astro.redirect(`/projects?renamed=${encodeURIComponent(slug)}`, 303);
+      case 'unknown-slug':
+        formError = `No project with the slug "${slug}".`;
+        editSlug = '';
+        break;
+      case 'rejected':
+      case 'failed':
+        formError = result.message;
+        editSlug = slug;
+        break;
+      default: {
+        const _never: never = result;
+        throw new Error(`unhandled rename result: ${String(_never)}`);
+      }
+    }
+  }
+}
+
+if (orgId !== null) {
+  try {
+    projects = await withTenant(orgId, async (client) => {
+      const result = await client.query<ProjectRow>(
+        `select p.slug, p.name, p.created_at, count(c.id)::text as card_count
+           from projects p
+           left join cards c on c.project_id = p.id
+          group by p.slug, p.name, p.created_at
+          order by p.slug`,
+      );
+      return result.rows;
+    });
+  } catch (error) {
+    failure = describe(error);
+  }
+}
+
+const nearDuplicates = findNearDuplicates(projects);
+const renamed = Astro.url.searchParams.get('renamed');
+---
+
+<Layout title="Projects">
+  <main id="main" class="anim-view shell" style="padding-block:var(--space-8)">
+    <header style="max-width:720px">
+      <p class="eyebrow">Curation</p>
+      <h1 class="display">Projects</h1>
+      <p style="margin:var(--space-2) 0 0;font-size:17px;color:var(--color-neutral-800)">
+        Agents create projects by publishing to a new name, so the display name comes from
+        whoever published first. Fix it here; the slug never changes.
+      </p>
+    </header>
+
+    <hr class="hr" />
+
+    {renamed !== null && (
+      <p
+        role="status"
+        style="border-left:3px solid var(--color-accent);background:var(--color-surface);margin:0 0 var(--space-4);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:14px"
+      >
+        Display name updated for <span class="mono">{renamed}</span>.
+      </p>
+    )}
+
+    {formError !== null && (
+      <p
+        id="rename-error"
+        role="alert"
+        style="border-left:3px solid var(--color-accent-2);background:var(--color-surface);margin:0 0 var(--space-4);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:14px"
+      >
+        {formError}
+      </p>
+    )}
+
+    {failure !== null && (
+      <p
+        role="alert"
+        class="mono"
+        style="border-left:3px solid var(--color-accent-2);background:var(--color-surface);margin:0;padding:var(--space-3);border-radius:var(--radius-md);font-size:12px;overflow-wrap:anywhere"
+      >
+        {failure}
+      </p>
+    )}
+
+    {failure === null && (
+      <>
+        <section aria-labelledby="projects-heading">
+          <h2
+            id="projects-heading"
+            class="eyebrow"
+            style="font-family:var(--font-body);margin-bottom:var(--space-2)"
+          >
+            Every project on the board
+          </h2>
+
+          {projects.length === 0 ? (
+            <p style="color:var(--color-neutral-700)">
+              No projects yet. One appears the first time an agent publishes to a new name.
+            </p>
+          ) : (
+            <table class="table">
+              <caption class="sr-only">Projects, their card counts, and the rename action</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Slug</th>
+                  <th scope="col">Display name</th>
+                  <th scope="col" style="text-align:right">Cards</th>
+                  <th scope="col">Created</th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {projects.map((project) => {
+                  const editing = project.slug === editSlug;
+                  const formId = `rename-${project.slug}`;
+                  const inputId = `name-${project.slug}`;
+                  return (
+                    <tr style={editing ? 'background:var(--color-surface)' : undefined}>
+                      <td class="mono">{project.slug}</td>
+                      <td style="min-width:260px">
+                        {editing ? (
+                          <form method="POST" id={formId}>
+                            <input type="hidden" name="slug" value={project.slug} />
+                            <label class="sr-only" for={inputId}>
+                              Display name for {project.slug}
+                            </label>
+                            <input
+                              id={inputId}
+                              class="input"
+                              name="name"
+                              type="text"
+                              value={project.name}
+                              required
+                              autofocus
+                              maxlength={MAX_PROJECT_NAME_LENGTH}
+                              aria-invalid={formError !== null ? 'true' : undefined}
+                              aria-describedby={formError !== null ? 'rename-error' : undefined}
+                            />
+                          </form>
+                        ) : (
+                          project.name
+                        )}
+                      </td>
+                      <td class="mono" style="text-align:right">{project.card_count}</td>
+                      <td>
+                        <time datetime={project.created_at.toISOString()}>
+                          {project.created_at.toISOString().slice(0, 10)}
+                        </time>
+                      </td>
+                      <td style="text-align:right;white-space:nowrap">
+                        {editing ? (
+                          <>
+                            <button type="submit" form={formId} class="btn btn-primary">
+                              Save
+                            </button>
+                            <a href="/projects" class="btn btn-secondary" style="margin-left:var(--space-1)">
+                              Cancel
+                            </a>
+                          </>
+                        ) : (
+                          <a
+                            href={`/projects?edit=${encodeURIComponent(project.slug)}`}
+                            class="btn btn-ghost"
+                          >
+                            Rename<span class="sr-only"> {project.name}</span>
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section aria-labelledby="dupes-heading" style="margin-top:var(--space-8)">
+          <h2
+            id="dupes-heading"
+            class="eyebrow"
+            style="font-family:var(--font-body);margin-bottom:var(--space-2)"
+          >
+            Near-duplicate names
+          </h2>
+          <p style="max-width:640px;font-size:14px;color:var(--color-neutral-700)">
+            Renaming does not move cards — republish the single card under the real slug, then
+            delete it here.
+          </p>
+
+          {nearDuplicates.length === 0 ? (
+            <p style="color:var(--color-neutral-700);font-size:14px">
+              No two slugs are close enough to be a fork.
+            </p>
+          ) : (
+            <ul style="list-style:none;margin:0;padding:0;border-top:1px solid var(--color-divider)">
+              {nearDuplicates.map((pair) => (
+                <li
+                  style="display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--color-divider)"
+                >
+                  <span class="mono">{pair.left.slug}</span>
+                  <span aria-hidden="true">↔</span>
+                  <span class="sr-only">and</span>
+                  <span class="mono">{pair.right.slug}</span>
+                  <span class="tag tag-accent-2">{pairReason(pair)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </>
+    )}
+  </main>
+</Layout>
