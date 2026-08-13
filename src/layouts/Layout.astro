@@ -12,13 +12,13 @@ type Props = {
 
 const { title, orgLabel = 'context_shared', chrome = true } = Astro.props;
 
-// Cards and Board health are designed but not built. Showing them as plain labels states the
-// roadmap honestly; linking them would hand the operator a 404.
+// Every section is built. An entry with built:false renders as a plain label rather than a
+// link, so a designed-but-unbuilt route never hands the operator a 404.
 const NAV = [
   { href: '/', label: 'Board', built: true },
   { href: '/keys', label: 'Keys', built: true },
-  { href: '/cards', label: 'Cards', built: false },
-  { href: '/health', label: 'Health', built: false },
+  { href: '/cards', label: 'Cards', built: true },
+  { href: '/health', label: 'Health', built: true },
   { href: '/projects', label: 'Projects', built: true },
 ] as const;
 
