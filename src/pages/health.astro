@@ -1,0 +1,324 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { panelOrgId } from '../lib/db';
+import {
+  STALE_AFTER_DAYS,
+  describeFork,
+  loadBoardHealth,
+  proportion,
+  reviewHref,
+  type BoardHealth,
+} from '../lib/health';
+
+type MetricView = {
+  readonly count: number;
+  readonly label: string;
+  readonly note: string;
+  readonly tint: string;
+};
+
+const RELATIVE = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+const UNITS: readonly (readonly [Intl.RelativeTimeFormatUnit, number])[] = [
+  ['year', 31_536_000],
+  ['month', 2_592_000],
+  ['week', 604_800],
+  ['day', 86_400],
+  ['hour', 3_600],
+  ['minute', 60],
+];
+
+function relativeTime(moment: Date, now: number): string {
+  const seconds = Math.round((now - moment.getTime()) / 1000);
+  for (const [unit, size] of UNITS) {
+    if (Math.abs(seconds) >= size) return RELATIVE.format(-Math.round(seconds / size), unit);
+  }
+  return RELATIVE.format(-seconds, 'second');
+}
+
+const EMPTY: BoardHealth = {
+  totals: { cards: 0, stale: 0, unverifiable: 0 },
+  stale: [],
+  unverifiable: [],
+  forks: [],
+};
+
+let health: BoardHealth = EMPTY;
+let failure: string | null = null;
+
+try {
+  health = await loadBoardHealth(await panelOrgId());
+} catch (error) {
+  failure = error instanceof Error ? error.message : String(error);
+}
+
+const { totals, stale, unverifiable, forks } = health;
+const now = Date.now();
+
+// The three process inks, one per signal. The bars are decorative: the numeral and its label
+// carry the reading, so nothing here depends on telling cyan from magenta.
+const metrics: readonly MetricView[] = [
+  {
+    count: totals.stale,
+    label: 'Stale cards',
+    note: `Untouched for more than ${STALE_AFTER_DAYS} days. The code moved on; the card may not have.`,
+    tint: 'var(--color-accent-2)',
+  },
+  {
+    count: totals.unverifiable,
+    label: 'Unverifiable cards',
+    note: 'No commit, PR or endpoint anchors the claim, so nothing can be checked against it.',
+    tint: 'var(--color-accent)',
+  },
+  {
+    count: forks.length,
+    label: 'Suspected typo forks',
+    note: 'Pairs of project slugs close enough that one is likely a misspelling of the other.',
+    tint: 'var(--color-process-yellow)',
+  },
+];
+
+const staleHidden = totals.stale - stale.length;
+const unverifiableHidden = totals.unverifiable - unverifiable.length;
+---
+
+<Layout title="Board health">
+  <main id="main" class="anim-view shell" style="padding-block:var(--space-8)">
+    <header style="max-width:720px">
+      <p class="eyebrow">Diagnostics</p>
+      <h1 class="display">Board health</h1>
+      <p style="margin:var(--space-2) 0 0;font-size:17px;color:var(--color-neutral-800)">
+        Three ways a board rots. Every number here is already in the data &mdash; nothing new
+        is collected.
+      </p>
+    </header>
+
+    <hr class="hr" />
+
+    {failure !== null && (
+      <section
+        role="alert"
+        style="border-left:3px solid var(--color-accent-2);background:var(--color-surface);padding:var(--space-3) var(--space-4);border-radius:var(--radius-md)"
+      >
+        <h2 style="font-size:17px;margin:0 0 var(--space-1)">Could not reach the board</h2>
+        <p class="mono" style="margin:0;font-size:12px;overflow-wrap:anywhere">{failure}</p>
+      </section>
+    )}
+
+    {failure === null && (
+      <>
+        <section aria-labelledby="signals-heading">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3)">
+            <h2
+              id="signals-heading"
+              class="eyebrow"
+              style="font-family:var(--font-body);margin-bottom:var(--space-3)"
+            >
+              Rot signals
+            </h2>
+            <p class="eyebrow" style="font-family:var(--font-body);margin-bottom:var(--space-3)">
+              {totals.cards} cards on the board
+            </p>
+          </div>
+
+          <ul style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--space-6)">
+            {metrics.map((metric) => (
+              <li style="min-width:0">
+                <div style="display:flex">
+                  <span
+                    class="cmyk-num"
+                    aria-hidden="true"
+                    style="flex:none;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:76px"
+                  >
+                    <span class="paper">{metric.count}</span>
+                    <span class="plate plate-c">{metric.count}</span>
+                    <span class="plate plate-m">{metric.count}</span>
+                    <span class="plate plate-y">{metric.count}</span>
+                  </span>
+                </div>
+
+                <p
+                  style="margin:var(--space-3) 0 0;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:17px;line-height:1.2"
+                >
+                  <span class="sr-only">{metric.count} </span>{metric.label}
+                </p>
+                <p
+                  style="margin:var(--space-1) 0 0;max-width:34ch;font-size:13px;color:var(--color-neutral-700)"
+                >
+                  {metric.note}
+                </p>
+
+                <div
+                  aria-hidden="true"
+                  style="height:4px;margin-top:var(--space-2);background:var(--color-neutral-200);border-radius:var(--radius-sm)"
+                >
+                  <div
+                    style={`height:4px;width:${proportion(metric.count, totals.cards).toFixed(1)}%;background:${metric.tint};border-radius:var(--radius-sm)`}
+                  >
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section aria-labelledby="stale-heading" style="margin-top:var(--space-8)">
+          <h2
+            id="stale-heading"
+            class="eyebrow"
+            style="font-family:var(--font-body);margin-bottom:var(--space-2)"
+          >
+            Stale &mdash; untouched longest first
+          </h2>
+
+          {stale.length === 0 ? (
+            <p style="max-width:60ch;color:var(--color-neutral-700)">
+              Nothing has gone {STALE_AFTER_DAYS} days without an update. Every card on the
+              board has been touched more recently than that.
+            </p>
+          ) : (
+            <>
+              {staleHidden > 0 && (
+                <p style="margin:0 0 var(--space-2);max-width:60ch;font-size:13px;color:var(--color-neutral-700)">
+                  Showing the {stale.length} oldest. {staleHidden} more stale cards are not
+                  listed here.
+                </p>
+              )}
+
+              <table class="table">
+                <caption class="sr-only">
+                  Stale cards, oldest first, with their project and the date they were last updated
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Card</th>
+                    <th scope="col">Project</th>
+                    <th scope="col">Last updated</th>
+                    <th scope="col"><span class="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stale.map((card) => (
+                    <tr>
+                      <td>
+                        <span class="mono" style="display:block;font-size:13px">{card.cardKey}</span>
+                        <span style="display:block;max-width:64ch;color:var(--color-neutral-800)">
+                          {card.summary}
+                        </span>
+                      </td>
+                      <td>{card.projectName}</td>
+                      <td style="white-space:nowrap">
+                        <time datetime={card.updatedAt.toISOString()}>
+                          {card.updatedAt.toISOString().slice(0, 10)}
+                        </time>
+                        <span style="display:block;font-size:12px;color:var(--color-neutral-700)">
+                          {relativeTime(card.updatedAt, now)}
+                        </span>
+                      </td>
+                      <td style="text-align:right">
+                        <a href={reviewHref(card.cardKey)} class="btn btn-ghost">
+                          Review<span class="sr-only"> {card.cardKey}</span>
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </section>
+
+        <div
+          style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--space-8);margin-top:var(--space-8)"
+        >
+          <section aria-labelledby="unverifiable-heading">
+            <h2
+              id="unverifiable-heading"
+              class="eyebrow"
+              style="font-family:var(--font-body);margin-bottom:var(--space-2)"
+            >
+              Unverifiable &mdash; empty source_refs
+            </h2>
+
+            {unverifiable.length === 0 ? (
+              <p style="max-width:52ch;color:var(--color-neutral-700)">
+                Every card points at a commit, a PR or an endpoint. Nothing on the board rests
+                on an unanchored claim.
+              </p>
+            ) : (
+              <>
+                {unverifiableHidden > 0 && (
+                  <p style="margin:0 0 var(--space-2);max-width:52ch;font-size:13px;color:var(--color-neutral-700)">
+                    Showing {unverifiable.length} of {totals.unverifiable}. {unverifiableHidden} more
+                    are not listed here.
+                  </p>
+                )}
+
+                <ul style="border-top:1px solid var(--color-divider)">
+                  {unverifiable.map((card) => (
+                    <li
+                      style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--color-divider)"
+                    >
+                      <div style="flex:1 1 240px;min-width:0">
+                        <p class="mono" style="margin:0;font-size:13px">{card.cardKey}</p>
+                        <p style="margin:var(--space-1) 0 0;max-width:52ch">{card.summary}</p>
+                        <p style="margin:var(--space-1) 0 0;font-size:12px;color:var(--color-neutral-700)">
+                          {card.projectName}
+                          {card.reason === 'malformed' && (
+                            <span class="tag tag-accent-2" style="margin-left:var(--space-2)">
+                              source_refs is not a list
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <a href={reviewHref(card.cardKey)} class="btn btn-ghost">
+                        Review<span class="sr-only"> {card.cardKey}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+
+          <section aria-labelledby="forks-heading">
+            <h2
+              id="forks-heading"
+              class="eyebrow"
+              style="font-family:var(--font-body);margin-bottom:var(--space-2)"
+            >
+              Suspected typo forks
+            </h2>
+
+            {forks.length === 0 ? (
+              <p style="max-width:52ch;color:var(--color-neutral-700)">
+                No two project slugs are close enough to be a fork. Every project on the board
+                reads as deliberate.
+              </p>
+            ) : (
+              <ul style="border-top:1px solid var(--color-divider)">
+                {forks.map((fork) => (
+                  <li style="padding:var(--space-2) 0;border-bottom:1px solid var(--color-divider)">
+                    <p class="mono" style="margin:0">
+                      <span style="color:var(--color-accent-2-700)">{fork.suspect.slug}</span>
+                      <span aria-hidden="true" style="padding:0 6px">&asymp;</span>
+                      <span class="sr-only"> looks like a typo of </span>
+                      <span>{fork.real.slug}</span>
+                    </p>
+                    <p
+                      style="margin:var(--space-1) 0 0;max-width:52ch;font-size:13px;color:var(--color-neutral-700)"
+                    >
+                      {describeFork(fork)}
+                    </p>
+                    <a href="/projects" class="btn btn-ghost" style="padding-left:0">
+                      Curate in Projects<span class="sr-only"> &mdash; {fork.suspect.slug}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      </>
+    )}
+  </main>
+</Layout>
