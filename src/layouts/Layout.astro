@@ -4,13 +4,20 @@ import '../styles/global.css';
 type Props = {
   /** Page title; the board name is appended automatically. */
   readonly title: string;
+  /** Overrides the default meta description for this page. */
+  readonly description?: string;
   /** Organization shown in the masthead. */
   readonly orgLabel?: string;
   /** Login renders without the nav: there is nowhere to navigate to yet. */
   readonly chrome?: boolean;
 };
 
-const { title, orgLabel = 'context_shared', chrome = true } = Astro.props;
+const {
+  title,
+  description = 'Administer the context_shared board: issue and revoke agent credentials, curate projects, and remove cards.',
+  orgLabel = 'context_shared',
+  chrome = true,
+} = Astro.props;
 
 // Every section is built. An entry with built:false renders as a plain label rather than a
 // link, so a designed-but-unbuilt route never hands the operator a 404.
@@ -32,10 +39,21 @@ const isCurrent = (href: string): boolean =>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} · Boardroom</title>
+    <meta name="description" content={description} />
+
+    {/* An admin panel has nothing to gain from being indexed and a lot to lose: the login
+        page alone tells a crawler exactly what this deployment is and where it lives. */}
+    <meta name="robots" content="noindex, nofollow" />
+
+    {/* Broadsheet is light-only. Declaring it stops a browser in forced-dark from inverting
+        a palette that has no dark counterpart. */}
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f3f2f2" />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" href="/favicon.ico" />
+    <link rel="icon" sizes="32x32" href="/favicon.ico" />
     <meta name="generator" content={Astro.generator} />
-    <title>{title} · context_shared</title>
   </head>
   <body>
     <a href="#main" class="skip-link">Skip to content</a>
