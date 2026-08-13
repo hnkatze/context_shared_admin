@@ -9,9 +9,17 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "check": "astro check",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^7.2.1"
+    "@astrojs/vercel": "^11.0.5",
+    "astro": "^7.2.1",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@types/pg": "^8.21.0",
+    "typescript": "^6.0.3"
   }
 }

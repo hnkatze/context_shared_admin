@@ -1,23 +1,84 @@
+---
+import '../styles/global.css';
+
+type Props = {
+  /** Page title; the board name is appended automatically. */
+  readonly title: string;
+  /** Organization shown in the masthead. */
+  readonly orgLabel?: string;
+  /** Login renders without the nav: there is nowhere to navigate to yet. */
+  readonly chrome?: boolean;
+};
+
+const { title, orgLabel = 'context_shared', chrome = true } = Astro.props;
+
+// Cards and Board health are designed but not built. Showing them as plain labels states the
+// roadmap honestly; linking them would hand the operator a 404.
+const NAV = [
+  { href: '/', label: 'Board', built: true },
+  { href: '/keys', label: 'Keys', built: true },
+  { href: '/cards', label: 'Cards', built: false },
+  { href: '/health', label: 'Health', built: false },
+  { href: '/projects', label: 'Projects', built: true },
+] as const;
+
+const path = Astro.url.pathname;
+const isCurrent = (href: string): boolean =>
+  href === '/' ? path === '/' : path.startsWith(href);
+---
+
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro Basics</title>
-	</head>
-	<body>
-		<slot />
-	</body>
-</html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title} · context_shared</title>
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to content</a>
 
-<style>
-	html,
-	body {
-		margin: 0;
-		width: 100%;
-		height: 100%;
-	}
-</style>
+    {chrome && (
+      <header class="masthead">
+      <div class="shell masthead-inner">
+        <div class="masthead-identity">
+          <span class="nav-brand" style="margin-right:0">Boardroom</span>
+          <span class="masthead-meta">admin · {orgLabel}</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:var(--space-3)">
+          <nav aria-label="Sections" class="nav-sections">
+            {NAV.map((item) =>
+              item.built ? (
+                <a
+                  href={item.href}
+                  aria-current={isCurrent(item.href) ? 'page' : undefined}
+                  class="nav-link"
+                >
+                  {item.label}
+                </a>
+              ) : (
+                // Not a link and not `aria-disabled`: a bare span has role `generic`, which
+                // does not support that state, so it would announce as ordinary text.
+                <span class="nav-link-pending">
+                  {item.label}<span class="sr-only"> — designed, not built yet</span>
+                </span>
+              ),
+            )}
+          </nav>
+
+          <form method="POST" action="/logout">
+            <button type="submit" class="btn btn-secondary" style="font-size:13px;padding:var(--space-1) var(--space-3)">
+              Sign out
+            </button>
+          </form>
+        </div>
+      </div>
+      </header>
+    )}
+
+    <slot />
+  </body>
+</html>

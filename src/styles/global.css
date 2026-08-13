@@ -1,0 +1,5 @@
+/* Broadsheet is the only stylesheet. Tailwind was removed once no markup used a single
+   utility: because an unlayered sheet outranks every cascade layer, keeping it around
+   meant any utility touching a property Broadsheet declares was silently discarded —
+   a trap rather than a safety net. Its preflight is ported into the base reset here. */
+@import "./broadsheet.css";

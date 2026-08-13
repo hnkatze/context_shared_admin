@@ -1,0 +1,381 @@
+/* Broadsheet — design-system tokens and component classes, imported from the
+   Claude Design project "UI mockups para Broadsheet". This file is the source of
+   truth for the system's look; retune it here.
+
+   Three deliberate divergences from the upstream system:
+   1. --font-body is Poppins. Upstream sets Source Serif 4 for both roles; the
+      panel pairs Poppins for UI and running text with the serif kept for display
+      headings, so the editorial character survives at heading sizes only.
+   2. The print-plate treatments for IMAGES (.halftone, .cmyk img, .cmyk .print)
+      are dropped. They depend on SVG filter defs from print-plates.js that this
+      panel does not ship. The TEXT constructions (.cmyk-num, .cmyk-head) are kept
+      — they are pure CSS and degrade to static when the press driver is absent.
+   3. Contrast. Upstream uses --color-accent as a TEXT colour and as the primary
+      button fill; on the paper ground both measure 3.65:1, under the 4.5:1 bar.
+      The upstream mockup papers over it per page (its local <style> overrides
+      links to --color-accent-700), which does not survive into components. Fixed
+      at the source instead: accent-as-text is now --color-accent-700 (5.72:1),
+      .btn-primary fills with -700 and darkens on hover, .eyebrow moved off
+      --color-neutral-600 (3.85:1) to -700 (5.83:1), the muted text mixes went
+      from 50-60% ink to 70% (5.79:1), and form controls took a dedicated
+      --color-field-border because --color-divider is a decorative hairline far
+      under the 3:1 UI-component bar. Ratios measured, not estimated. Cyan is
+      still the system's voice — it just carries text one step darker. */
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Poppins:wght@400;500;600&display=swap');
+
+:root {
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #0088b0;
+  --color-accent-2: #d6006c;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+  /* A form control is a UI component: its boundary needs 3:1, which --color-divider
+     (a decorative hairline) misses by a wide margin. Measured 3.08:1 on the surface fill. */
+  --color-field-border: color-mix(in srgb, #201e1d 50%, transparent);
+
+  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
+     same step of any role matches the others in visual value. */
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
+
+  --color-accent-100: #e9f8ff;
+  --color-accent-200: #cbeeff;
+  --color-accent-300: #99e0ff;
+  --color-accent-400: #62c5ee;
+  --color-accent-500: #38a6cf;
+  --color-accent-600: #1186ac;
+  --color-accent-700: #006786;
+  --color-accent-800: #004961;
+  --color-accent-900: #0a303e;
+
+  --color-accent-2-100: #fff1f4;
+  --color-accent-2-200: #ffdee6;
+  --color-accent-2-300: #ffc0d0;
+  --color-accent-2-400: #ff90b1;
+  --color-accent-2-500: #ff458e;
+  --color-accent-2-600: #d82071;
+  --color-accent-2-700: #aa0b56;
+  --color-accent-2-800: #790e3d;
+  --color-accent-2-900: #4b1528;
+
+  /* The third process ink. A print treatment color, not an interface accent —
+     body copy and chrome never take it. */
+  --color-process-yellow: #edbb00;
+
+  --font-heading: "Source Serif 4", Georgia, serif;
+  --font-heading-weight: 600;
+  --font-body: "Poppins", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --space-1: 5.0px;
+  --space-2: 10.0px;
+  --space-3: 15.0px;
+  --space-4: 20.0px;
+  --space-6: 30.0px;
+  --space-8: 40.0px;
+
+  /* The measure every page and the masthead share, so the brand and the page title
+     sit on the same axis. Text inside still caps itself in ch — a wide shell is for
+     tables and columns, never for a long line of prose. */
+  --shell-max: 1400px;
+
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
+}
+
+/* ── Base reset ────────────────────────────────────────────────────────────────
+   Ported from Tailwind's preflight when Tailwind was removed. Broadsheet was
+   silently relying on all of it: without these rules links regain UA underlines,
+   [hidden] stops hiding .card/.dialog (their `display:flex` outranks it without
+   !important), and lists regain discs and 40px of padding. */
+
+*, *::before, *::after, ::backdrop, ::file-selector-button { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; tab-size: 4; }
+
+/* `hidden` must beat the flex/grid displays the component classes set. */
+[hidden]:where(:not([hidden="until-found"])) { display: none !important; }
+
+ul, ol, menu { list-style: none; margin: 0; padding: 0; }
+blockquote, dl, dd, fieldset, figure, hr, pre { margin: 0; }
+fieldset, legend { padding: 0; border: 0; }
+table { border-collapse: collapse; }
+img, video, canvas, svg { max-width: 100%; }
+img, video { height: auto; }
+
+button, input, select, textarea {
+  font: inherit; color: inherit; letter-spacing: inherit;
+  margin: 0; padding: 0; background: transparent; border: 0;
+}
+button { cursor: pointer; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  font-weight: 400;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
+}
+h1 { font-size: 42px; }
+h2 { font-size: 32px; }
+h3 { font-size: 25px; }
+h4 { font-size: 20px; }
+h5 { font-size: 16px; }
+h6 { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+p { margin: 0 0 var(--space-3); }
+a { color: var(--color-accent-700); text-decoration: underline; text-underline-offset: 3px; }
+img { display: block; max-width: 100%; }
+figure { margin: 0; }
+
+.text-muted { color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.mono { font-family: var(--font-mono); }
+
+:focus:not(:focus-visible) { outline: none; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+/* The eyebrow that labels every block in the system. */
+.eyebrow {
+  font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--color-neutral-700); margin: 0 0 var(--space-3);
+}
+
+/* Display headline, the size the mockup sets on each view title. */
+.display {
+  font-family: var(--font-heading); font-size: 44px; line-height: 1.04;
+  margin: 0; letter-spacing: -0.02em;
+}
+
+/* The page measure. Applied to <main> and to the masthead inner so both align. */
+.shell {
+  width: 100%; max-width: var(--shell-max); margin-inline: auto;
+  padding-inline: var(--space-8);
+}
+
+/* Visually hidden but present for assistive tech. `clip` is deprecated and also clips
+   the focus ring, so it is paired with clip-path. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap; border: 0;
+}
+
+/* Revealed by :focus alone. A JS class toggle would leave sighted keyboard users with
+   nothing to see when scripting is off — and this panel must work without it. */
+.skip-link {
+  text-decoration: none;
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.skip-link:focus {
+  position: fixed; left: var(--space-4); top: var(--space-4); z-index: 50;
+  width: auto; height: auto; overflow: visible; clip: auto; clip-path: none;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg); color: var(--color-text);
+  border: 1px solid var(--color-field-border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+/* — rules — */
+.hr { height: 1px; border: 0; margin: var(--space-4) 0; background: var(--color-divider); }
+
+/* — buttons — */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; text-decoration: none;
+  font-family: var(--font-body); font-weight: 500;
+  font-size: 14px; line-height: 1.2; color: var(--color-text);
+  background: transparent; border: 1px solid transparent;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius-md);
+}
+.btn svg { display: block; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--color-accent-700); color: var(--color-bg); }
+.btn-primary:hover:not(:disabled) { background: var(--color-accent-800); }
+.btn-primary:active:not(:disabled) { background: var(--color-accent-900); }
+.btn-danger { background: var(--color-accent-2); color: #fff; }
+.btn-danger:hover:not(:disabled) { background: var(--color-accent-2-600); }
+.btn-danger:active:not(:disabled) { background: var(--color-accent-2-700); }
+.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.btn-secondary:active:not(:disabled) { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+.btn-ghost { color: var(--color-accent-700); padding-inline: var(--space-1); }
+.btn-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.btn-ghost:active:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.btn-block { width: 100%; margin-top: var(--space-2); }
+
+/* — forms — */
+.field { margin-bottom: var(--space-3); }
+.field > label {
+  display: block; font-size: 12px; margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+.input {
+  width: 100%; min-height: 36px; padding: 6px 10px; font: inherit;
+  font-size: 14px; color: var(--color-text); caret-color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-field-border); border-radius: var(--radius-md);
+}
+/* Explicit and measured: the browser default gray misses the 4.5:1 small-text bar
+   on the surface fill; 65% ink measures 4.8:1 there. */
+.input::placeholder { color: color-mix(in srgb, var(--color-text) 65%, transparent); opacity: 1; }
+.input:hover { border-color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+.input[aria-invalid="true"] { border-color: var(--color-accent-2); }
+textarea.input { min-height: 90px; resize: vertical; }
+
+/* — cards — */
+.card {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
+}
+.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent-700); }
+.card-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 17px; line-height: 1.2; }
+.card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
+.card-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.elev-sm { box-shadow: var(--shadow-sm); }
+.elev-md { box-shadow: var(--shadow-md); }
+.elev-lg { box-shadow: var(--shadow-lg); }
+
+/* — tags — */
+.tag {
+  display: inline-flex; align-items: center; font-size: 11px; text-decoration: none;
+  letter-spacing: 0.02em; padding: 3px 10px;
+  border-radius: calc(var(--radius-md) * 0.75);
+}
+.tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
+.tag-accent-2 { background: var(--color-accent-2-100); color: var(--color-accent-2-800); }
+.tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.tag-outline { border: 1px solid var(--color-accent-700); color: var(--color-accent-700); }
+
+/* — navigation — */
+.nav { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4); }
+.nav-brand { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 18px; margin-right: auto; }
+.nav a { color: inherit; text-decoration: none; font-size: 14px; }
+.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent-700); }
+
+/* The masthead the panel shell renders: brand and org on the left, sections right. */
+/* Full-bleed so the rule crosses the whole viewport; the inner .shell is what aligns
+   the brand with the page title below it. */
+.masthead {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--color-bg); border-bottom: 1px solid var(--color-divider);
+}
+.masthead-inner {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  padding-block: var(--space-3);
+}
+.masthead-identity { display: flex; align-items: baseline; gap: var(--space-3); }
+.masthead-meta {
+  font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-neutral-700);
+}
+.nav-sections { display: flex; align-items: center; gap: var(--space-1); }
+
+/* Resting colour lives here rather than inline, or it would outrank the hover and
+   aria-current rules below and kill both designed states. */
+.nav-link {
+  position: relative; display: inline-flex; align-items: center;
+  padding: var(--space-1) var(--space-2);
+  font-size: 14px; line-height: 1.2; text-decoration: none;
+  color: var(--color-text); border-radius: var(--radius-md);
+}
+.nav-link:hover { color: var(--color-accent-700); background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.nav-link[aria-current=page] { color: var(--color-accent-700); }
+.nav-link[aria-current=page]::after {
+  content: ""; position: absolute; left: var(--space-2); right: var(--space-2);
+  bottom: -2px; height: 2px; background: var(--color-accent);
+}
+/* Not a link and not disabled markup: a plain label for a section that has no route yet.
+   The state is carried by visually hidden text, not by colour or a title attribute. */
+.nav-link-pending {
+  display: inline-flex; align-items: center;
+  padding: var(--space-1) var(--space-2);
+  font-size: 14px; line-height: 1.2; color: var(--color-neutral-700);
+}
+
+/* — tables — */
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th {
+  text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  padding: var(--space-2); border-bottom: 1px solid var(--color-divider);
+}
+.table td { padding: var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent); }
+.table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+
+/* — dialog — */
+.dialog-backdrop {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  padding: var(--space-4); z-index: 40;
+  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+}
+.dialog {
+  width: min(440px, 100%); display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-4); border-radius: var(--radius-lg);
+  background: var(--color-surface); box-shadow: var(--shadow-lg);
+}
+.dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
+.dialog-body { font-size: 14px; opacity: 0.85; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* — the plate numeral: display figures set as misregistered process plates.
+   Three plates, C/M/Y only — the dark core is the C×M×Y multiply overlap, the
+   fringes are the registration drift. Static without the press driver. — */
+.cmyk-num {
+  --cmyk-num-ground: var(--color-bg);
+  position: relative; width: fit-content; line-height: 0.9;
+  font-feature-settings: "pnum" 1;
+  background: var(--cmyk-num-ground); padding: 0.12em; margin: -0.12em;
+}
+.cmyk-num .paper {
+  color: var(--color-bg);
+  text-shadow: 0.036em 0.025em 0 var(--color-bg), -0.031em -0.023em 0 var(--color-bg);
+}
+.cmyk-num .plate { position: absolute; inset: 0.12em; mix-blend-mode: multiply; }
+.cmyk-num .plate-c { color: var(--color-accent); }
+.cmyk-num .plate-m { color: var(--color-accent-2); translate: 0.036em 0.025em; }
+.cmyk-num .plate-y { color: var(--color-process-yellow); translate: -0.031em -0.023em; }
+
+/* Motion in this system is entrance-only and never load-bearing. */
+@keyframes viewIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes rowIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sealIn { 0% { opacity: 0; transform: scale(.965) translateY(-10px); } 62% { transform: scale(1.006) translateY(0); } 100% { opacity: 1; transform: none; } }
+@keyframes sweep { 0% { background-position: -160% 0; } 100% { background-position: 260% 0; } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.anim-view { animation: viewIn .34s cubic-bezier(.2,.7,.2,1) both; }
+.anim-row { animation: rowIn .4s ease both; }
+.anim-seal { animation: sealIn .5s cubic-bezier(.2,.8,.2,1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
