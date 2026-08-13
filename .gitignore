@@ -22,3 +22,12 @@ pnpm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# vercel adapter output
+.vercel
+.claude
+.kiro
+.agents
+.atl
+CLAUDE.md
+skills-lock.json
