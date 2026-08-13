@@ -51,18 +51,19 @@ are short and purposeful. **Optimize for "get in, do the thing, leave" — not f
 | `/keys` | Built | Issue, reveal-once, revoke. The reason the panel exists |
 | `/projects` | Built | Curation: rename the display name, spot near-duplicate slugs |
 | `/logout` | Built | POST only |
-| `/cards` | **Designed, not built** | Filter and delete. Section 3.2 below |
-| `/health` | **Designed, not built** | Three rot metrics. Section 3.3 below |
+| `/cards` | Built | Filter, read in full, and delete behind a typed confirmation |
+| `/health` | Built | Stale, unverifiable, and suspected typo forks |
 
-The nav in `Layout.astro` renders `/cards` and `/health` as disabled items rather than links —
-they are designed but have no backend, and a link would hand the operator a 404.
+Every screen in this brief is built. `Layout.astro` keeps a `built` flag per nav entry: an entry
+set to false renders as a plain label instead of a link, so a future designed-but-unbuilt route
+never hands the operator a 404.
 
 ---
 
-## 3. What needs designing
+## 3. The screens
 
-In priority order. Build order matters: a key is what unblocks a second organization *today*;
-the health view is the most valuable screen at six months and the least urgent now.
+All five are built. This section stays as the specification of what each one is for and which
+data it actually has — read it before changing one, and keep it true when you do.
 
 ### 3.1 API keys — highest priority
 
@@ -92,7 +93,12 @@ system where a card can be removed.
 
 **Available data per card:** `card_key`, `module`, `summary`, `why_not_obvious`, `author`,
 `tags[]`, `updated_at`, `created_at`, plus `decisions` (JSON array of choice/rejected/reason),
-`gotchas[]`, `consumer_notes[]`, `source_refs` (JSON array of commit/PR/endpoint anchors).
+`gotchas[]`, `consumer_notes[]`, `source_refs` (JSON array of `{kind, ref}` anchors).
+
+**On `source_refs.kind`:** the schema comment documents `commit|pr|endpoint`, but production also
+carries `file` — and it is the most common value, 13 of 16 refs. Do not type this as a closed
+union; a strict guard blanks most real references. Treat `kind` as a string and render what is
+there.
 
 Deletion is destructive and irreversible. The design should make the operator read enough of the
 card to be sure — `summary` alone is not enough context to judge.
