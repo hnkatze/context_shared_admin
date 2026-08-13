@@ -1,0 +1,545 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { panelOrgId } from '../lib/db';
+import { deleteCard, findCard, loadCards, type CardView, type CardsView } from '../lib/cards';
+
+/**
+ * `confirm` renders the whole card again rather than a dialog: the operator has to be able to
+ * read what they are about to destroy while they type its key.
+ */
+type Panel =
+  | { readonly kind: 'list' }
+  | {
+      readonly kind: 'confirm';
+      readonly card: CardView;
+      readonly typed: string;
+      readonly error: string | null;
+    }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'gone'; readonly cardKey: string }
+  | { readonly kind: 'deleted'; readonly cardKey: string; readonly rows: number | null };
+
+/** FormData yields `string | File`; a File reaching here is a forged request, not our form. */
+function textField(form: FormData, key: string): string | null {
+  const value = form.get(key);
+  return typeof value === 'string' ? value : null;
+}
+
+const describe = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const isoDay = (value: Date): string => value.toISOString().slice(0, 10);
+
+const sameCard = (left: CardView, right: CardView): boolean =>
+  left.projectSlug === right.projectSlug && left.cardKey === right.cardKey;
+
+/** Ids are anchors and aria targets, so anything a slug or key could legally hold is folded out. */
+const domId = (card: CardView): string =>
+  `card-${card.projectSlug}-${card.cardKey}`.replace(/[^A-Za-z0-9_-]/g, '-');
+
+const params = Astro.url.searchParams;
+const query = (params.get('q') ?? '').trim();
+const moduleFilter = (params.get('module') ?? '').trim();
+const projectFilter = (params.get('project') ?? '').trim();
+
+/** Every link rebuilds the whole filter state; an empty override drops that parameter. */
+function cardsHref(overrides: Readonly<Record<string, string>>): string {
+  const next = new URLSearchParams();
+  if (query !== '') next.set('q', query);
+  if (moduleFilter !== '') next.set('module', moduleFilter);
+  if (projectFilter !== '') next.set('project', projectFilter);
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === '') next.delete(key);
+    else next.set(key, value);
+  }
+  const search = next.toString();
+  return search === '' ? '/cards' : `/cards?${search}`;
+}
+
+let failure: string | null = null;
+let panel: Panel = { kind: 'list' };
+let view: CardsView = { cards: [], total: 0, modules: [], projects: [] };
+
+let orgId: string | null = null;
+try {
+  orgId = await panelOrgId();
+} catch (error) {
+  failure = describe(error);
+}
+
+if (orgId !== null && Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const cardKey = textField(form, 'card_key');
+  const projectSlug = textField(form, 'project');
+  const typed = textField(form, 'confirm');
+
+  if (cardKey === null || projectSlug === null || typed === null) {
+    failure = 'The confirmation must be submitted as text.';
+  } else {
+    const outcome = await deleteCard(orgId, projectSlug, cardKey, typed);
+    switch (outcome.status) {
+      // Redirect on success so a refresh cannot replay a delete against a key someone reused.
+      case 'deleted':
+        return Astro.redirect(
+          cardsHref({ project: projectSlug, deleted: cardKey, rows: String(outcome.rows) }),
+          303,
+        );
+      case 'already-gone':
+        return Astro.redirect(cardsHref({ project: projectSlug, gone: cardKey }), 303);
+      case 'mismatch': {
+        const lookup = await findCard(orgId, projectSlug, cardKey);
+        panel =
+          lookup.status === 'found'
+            ? {
+                kind: 'confirm',
+                card: lookup.card,
+                typed,
+                error: `That is not the card key. Type ${cardKey} exactly, or keep the card.`,
+              }
+            : { kind: 'stale' };
+        break;
+      }
+      case 'failed':
+        failure = outcome.message;
+        break;
+      default: {
+        const _never: never = outcome;
+        throw new Error(`unhandled delete outcome: ${String(_never)}`);
+      }
+    }
+  }
+}
+
+if (orgId !== null && panel.kind === 'list' && failure === null) {
+  const confirmKey = params.get('confirm');
+  const deletedKey = params.get('deleted');
+  const goneKey = params.get('gone');
+
+  if (confirmKey !== null) {
+    try {
+      const lookup = await findCard(orgId, projectFilter, confirmKey);
+      panel =
+        lookup.status === 'found'
+          ? { kind: 'confirm', card: lookup.card, typed: '', error: null }
+          : { kind: 'stale' };
+    } catch (error) {
+      failure = describe(error);
+    }
+  } else if (deletedKey !== null) {
+    const reported = Number(params.get('rows'));
+    panel = {
+      kind: 'deleted',
+      cardKey: deletedKey,
+      rows: Number.isInteger(reported) && reported > 0 ? reported : null,
+    };
+  } else if (goneKey !== null) {
+    panel = { kind: 'gone', cardKey: goneKey };
+  }
+}
+
+if (orgId !== null && failure === null) {
+  try {
+    view = await loadCards(orgId, {
+      query,
+      module: moduleFilter,
+      project: projectFilter,
+    });
+  } catch (error) {
+    failure = describe(error);
+  }
+}
+
+// Narrowing a `let` across the template is fragile; freeze it once here.
+const state = panel;
+const target = state.kind === 'confirm' ? state.card : null;
+
+// The confirm link carries the filters, so the target is normally already in the list. It is
+// prepended when a hand-edited URL puts it outside them, because the card must still be readable.
+const listed: readonly CardView[] =
+  target !== null && !view.cards.some((card) => sameCard(card, target))
+    ? [target, ...view.cards]
+    : view.cards;
+
+const filtered = query !== '' || moduleFilter !== '' || projectFilter !== '';
+const countLabel = filtered
+  ? `${view.total} ${view.total === 1 ? 'card matches' : 'cards match'} these filters`
+  : `${view.total} ${view.total === 1 ? 'card' : 'cards'} published`;
+const projectName =
+  view.projects.find((project) => project.slug === projectFilter)?.name ?? projectFilter;
+
+const NOTICE_STYLE =
+  'border:1px solid var(--color-divider);border-left:2px solid var(--color-accent);border-radius:var(--radius-md);background:var(--color-surface);padding:var(--space-3);margin-bottom:var(--space-6);font-size:14px';
+const ALERT_STYLE =
+  'border:1px solid var(--color-divider);border-left:2px solid var(--color-accent-2);border-radius:var(--radius-md);background:var(--color-surface);padding:var(--space-3);margin-bottom:var(--space-6);font-size:14px';
+const SECTION_HEADING_STYLE = 'font-family:var(--font-body);margin-bottom:var(--space-2)';
+const LIST_STYLE = 'list-style:disc;margin:0;padding-left:1.1em;font-size:14px;max-width:60ch';
+---
+
+<Layout title="Cards">
+  <main id="main" class="anim-view shell" style="padding-block:var(--space-8)">
+    <header style="max-width:720px">
+      <p class="eyebrow">Curation</p>
+      <h1 class="display">Cards</h1>
+      <p style="margin:var(--space-2) 0 0;font-size:17px;color:var(--color-neutral-800);max-width:64ch">
+        The only place a card can be removed. Open one and read it before you decide &mdash; a
+        summary is not enough context to judge.
+      </p>
+    </header>
+
+    <hr class="hr" />
+
+    {failure !== null && (
+      <section role="alert" aria-labelledby="failure-heading" style={ALERT_STYLE}>
+        <h2 id="failure-heading" style="font-size:17px;margin:0 0 var(--space-1)">
+          Could not reach the board
+        </h2>
+        <p class="mono" style="margin:0;font-size:12px;overflow-wrap:anywhere">{failure}</p>
+      </section>
+    )}
+
+    {state.kind === 'deleted' && (
+      <p role="status" style={NOTICE_STYLE}>
+        Deleted <span class="mono">{state.cardKey}</span> from <strong>{projectName}</strong>.
+        {state.rows !== null && ` ${state.rows} row${state.rows === 1 ? '' : 's'} removed.`}
+        {' '}Nothing on this board can bring it back &mdash; an agent has to publish it again.
+      </p>
+    )}
+
+    {state.kind === 'gone' && (
+      <p role="status" style={ALERT_STYLE}>
+        Nothing was deleted: <span class="mono">{state.cardKey}</span> matched
+        <strong> 0 rows</strong>. It had already been removed &mdash; by another operator, or by
+        this panel in a request you sent twice.
+      </p>
+    )}
+
+    {state.kind === 'stale' && (
+      <p role="status" style={ALERT_STYLE}>
+        That card is not on the board. It was deleted already, or the project and key in the
+        address do not name a card in this organization.
+      </p>
+    )}
+
+    {failure === null && (
+      <>
+        <form method="GET" action="/cards" role="search" style="margin-bottom:var(--space-4)">
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-3)">
+            <div class="field" style="flex:1 1 320px;max-width:420px;margin-bottom:0">
+              <label for="q">Search summary, gotchas, decisions</label>
+              <input
+                id="q"
+                class="input"
+                type="search"
+                name="q"
+                value={query}
+                placeholder="idempotency, retry, webhook&hellip;"
+                autocomplete="off"
+              />
+            </div>
+
+            <div class="field" style="flex:0 1 220px;margin-bottom:0">
+              <label for="module">Module</label>
+              <select id="module" class="input" name="module">
+                <option value="">Every module</option>
+                {view.modules.map((name) => (
+                  <option value={name} selected={name === moduleFilter}>{name}</option>
+                ))}
+              </select>
+            </div>
+
+            {projectFilter !== '' && <input type="hidden" name="project" value={projectFilter} />}
+
+            <button type="submit" class="btn btn-primary">Apply</button>
+            {filtered && <a class="btn btn-ghost" href="/cards">Clear filters</a>}
+          </div>
+        </form>
+
+        <nav
+          aria-label="Filter by project"
+          style="display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-4)"
+        >
+          <a
+            href={cardsHref({ project: '' })}
+            aria-current={projectFilter === '' ? 'page' : undefined}
+            class={projectFilter === '' ? 'tag tag-accent' : 'tag tag-outline'}
+            style="gap:6px"
+          >
+            <span>All projects</span>
+            <span class="mono" style="opacity:.7">
+              {view.projects.reduce((total, project) => total + project.count, 0)}
+            </span>
+          </a>
+          {view.projects.map((project) => (
+            <a
+              href={cardsHref({ project: project.slug })}
+              aria-current={project.slug === projectFilter ? 'page' : undefined}
+              class={project.slug === projectFilter ? 'tag tag-accent' : 'tag tag-outline'}
+              style="gap:6px"
+            >
+              <span>{project.name}</span>
+              <span class="mono" style="opacity:.7">{project.count}</span>
+            </a>
+          ))}
+        </nav>
+
+        <section aria-labelledby="cards-heading">
+          <div style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-3)">
+            <h2 id="cards-heading" class="eyebrow" style={SECTION_HEADING_STYLE}>
+              Cards on the board
+            </h2>
+            <p class="eyebrow" style={SECTION_HEADING_STYLE}>{countLabel}</p>
+          </div>
+
+          {listed.length === 0 ? (
+            <p style="margin:var(--space-4) 0 0;color:var(--color-neutral-700)">
+              {filtered ? 'No card matches these filters.' : 'Nothing published yet.'}
+            </p>
+          ) : (
+            <ul style="margin:0;padding:0;border-top:1px solid var(--color-divider)">
+              {listed.map((card) => {
+                const id = domId(card);
+                const isTarget = target !== null && sameCard(card, target);
+                const unverifiable =
+                  card.sourceRefs.status === 'ok' && card.sourceRefs.items.length === 0;
+                return (
+                  <li style="border-bottom:1px solid var(--color-divider)">
+                    <details
+                      id={id}
+                      open={isTarget}
+                      style={
+                        isTarget
+                          ? 'border-left:2px solid var(--color-accent-2);background:var(--color-surface)'
+                          : undefined
+                      }
+                    >
+                      <summary style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--space-4);padding:var(--space-3);cursor:pointer">
+                        <div style="flex:1 1 460px;min-width:0">
+                          <p class="mono" style="margin:0;font-size:13px;color:var(--color-neutral-700)">
+                            <span style="color:var(--color-text)">{card.cardKey}</span>
+                            <span aria-hidden="true" style="padding:0 6px">/</span>
+                            <span>{card.module}</span>
+                          </p>
+                          <p style="margin:var(--space-1) 0 0;font-size:17px;line-height:1.35;max-width:72ch">
+                            {card.summary}
+                          </p>
+                          {unverifiable && (
+                            <span class="tag tag-accent-2" style="margin-top:var(--space-2)">
+                              no source refs
+                            </span>
+                          )}
+                        </div>
+
+                        <div style="flex:0 0 auto;text-align:right;font-size:12px;color:var(--color-neutral-600)">
+                          <p style="margin:0;color:var(--color-text)">{card.projectName}</p>
+                          <p style="margin:0">
+                            updated{' '}
+                            <time datetime={card.updatedAt.toISOString()}>
+                              {isoDay(card.updatedAt)}
+                            </time>
+                          </p>
+                          <p aria-hidden="true" style="margin:0;color:var(--color-accent-700)">▾</p>
+                        </div>
+                      </summary>
+
+                      <div style="padding:0 var(--space-3) var(--space-4)">
+                        <p style="max-width:64ch;margin:0 0 var(--space-4);padding-left:var(--space-3);border-left:2px solid var(--color-accent);font-size:19px;font-style:italic;line-height:1.45">
+                          {card.whyNotObvious}
+                        </p>
+
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--space-4)">
+                          <section aria-labelledby={`${id}-decisions`}>
+                            <h3 id={`${id}-decisions`} class="eyebrow" style={SECTION_HEADING_STYLE}>
+                              Decisions
+                            </h3>
+                            {card.decisions.status === 'unreadable' ? (
+                              <p style="margin:0;font-size:13px;max-width:60ch">
+                                <span class="tag tag-accent-2">unreadable</span>{' '}
+                                This column is not the shape the panel expects, so it is not
+                                rendered.
+                              </p>
+                            ) : card.decisions.items.length === 0 ? (
+                              <p class="text-muted" style="margin:0;font-size:13px">
+                                Nothing recorded.
+                              </p>
+                            ) : (
+                              <ul style="margin:0;padding:0;font-size:14px;max-width:60ch">
+                                {card.decisions.items.map((decision) => (
+                                  <li style="margin-bottom:var(--space-3)">
+                                    <p style="margin:0">
+                                      <strong>{decision.choice}</strong>
+                                      <span> over </span>
+                                      <s style="text-decoration-color:var(--color-accent-2);text-decoration-thickness:2px">
+                                        {decision.rejected}
+                                      </s>
+                                    </p>
+                                    <p class="text-muted" style="margin:var(--space-1) 0 0;font-size:13px">
+                                      {decision.reason}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </section>
+
+                          {card.gotchas.length > 0 && (
+                            <section aria-labelledby={`${id}-gotchas`}>
+                              <h3 id={`${id}-gotchas`} class="eyebrow" style={SECTION_HEADING_STYLE}>
+                                Gotchas
+                              </h3>
+                              <ul style={LIST_STYLE}>
+                                {card.gotchas.map((gotcha) => (
+                                  <li style="margin-bottom:var(--space-2)">{gotcha}</li>
+                                ))}
+                              </ul>
+                            </section>
+                          )}
+
+                          {card.consumerNotes.length > 0 && (
+                            <section aria-labelledby={`${id}-notes`}>
+                              <h3 id={`${id}-notes`} class="eyebrow" style={SECTION_HEADING_STYLE}>
+                                Consumer notes
+                              </h3>
+                              <ul style={LIST_STYLE}>
+                                {card.consumerNotes.map((note) => (
+                                  <li style="margin-bottom:var(--space-2)">{note}</li>
+                                ))}
+                              </ul>
+                            </section>
+                          )}
+
+                          <section aria-labelledby={`${id}-refs`}>
+                            <h3 id={`${id}-refs`} class="eyebrow" style={SECTION_HEADING_STYLE}>
+                              Source refs
+                            </h3>
+                            {card.sourceRefs.status === 'unreadable' ? (
+                              <p style="margin:0;font-size:13px;max-width:60ch">
+                                <span class="tag tag-accent-2">unreadable</span>{' '}
+                                This column is not the shape the panel expects, so it is not
+                                rendered.
+                              </p>
+                            ) : card.sourceRefs.items.length === 0 ? (
+                              <p style="margin:0;font-size:13px;max-width:60ch">
+                                Nothing anchors this claim to a commit, PR or endpoint. It cannot
+                                be verified against the code.
+                              </p>
+                            ) : (
+                              <ul class="mono" style="margin:0;padding:0;font-size:13px;max-width:60ch">
+                                {card.sourceRefs.items.map((ref) => (
+                                  <li style="margin-bottom:var(--space-1);overflow-wrap:anywhere">
+                                    <span style="color:var(--color-neutral-700)">{ref.kind}</span>
+                                    <span aria-hidden="true" style="padding:0 6px">·</span>
+                                    <span>{ref.ref}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </section>
+
+                          <section aria-labelledby={`${id}-provenance`}>
+                            <h3
+                              id={`${id}-provenance`}
+                              class="eyebrow"
+                              style={SECTION_HEADING_STYLE}
+                            >
+                              Provenance
+                            </h3>
+                            <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-3);margin:0;font-size:13px">
+                              <dt class="text-muted">Author</dt>
+                              <dd style="margin:0">{card.author}</dd>
+                              <dt class="text-muted">Created</dt>
+                              <dd style="margin:0">
+                                <time datetime={card.createdAt.toISOString()}>
+                                  {isoDay(card.createdAt)}
+                                </time>
+                              </dd>
+                              <dt class="text-muted">Tags</dt>
+                              <dd style="margin:0">
+                                {card.tags.length === 0 ? (
+                                  <span class="text-muted">none</span>
+                                ) : (
+                                  <span style="display:flex;flex-wrap:wrap;gap:var(--space-1)">
+                                    {card.tags.map((tag) => (
+                                      <span class="tag tag-outline">{tag}</span>
+                                    ))}
+                                  </span>
+                                )}
+                              </dd>
+                            </dl>
+                          </section>
+                        </div>
+
+                        <div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-divider)">
+                          {isTarget && state.kind === 'confirm' ? (
+                            <form method="POST">
+                              <input type="hidden" name="card_key" value={card.cardKey} />
+                              <input type="hidden" name="project" value={card.projectSlug} />
+
+                              <h3 style="font-size:20px;margin:0 0 var(--space-2)">
+                                Delete {card.cardKey}?
+                              </h3>
+                              <p style="max-width:64ch;font-size:14px">
+                                This removes the card from the board for every agent that reads
+                                it, and this panel is the only place it can happen. There is no
+                                undo and no archive.
+                              </p>
+
+                              {state.error !== null && (
+                                <p
+                                  id={`${id}-error`}
+                                  role="alert"
+                                  style="max-width:64ch;font-size:13px;padding:var(--space-2);margin:0 0 var(--space-3);color:var(--color-accent-2-800);background:var(--color-accent-2-100);border:1px solid var(--color-accent-2-300);border-radius:var(--radius-md)"
+                                >
+                                  {state.error}
+                                </p>
+                              )}
+
+                              <div class="field" style="max-width:400px">
+                                <label for={`${id}-confirm`}>
+                                  Type <span class="mono">{card.cardKey}</span> to confirm
+                                </label>
+                                <input
+                                  id={`${id}-confirm`}
+                                  class="input"
+                                  type="text"
+                                  name="confirm"
+                                  style="font-family:var(--font-mono)"
+                                  value={state.typed}
+                                  required
+                                  autofocus
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                  aria-invalid={state.error !== null ? 'true' : undefined}
+                                  aria-describedby={state.error !== null ? `${id}-error` : undefined}
+                                />
+                              </div>
+
+                              <div style="display:flex;flex-wrap:wrap;gap:var(--space-2)">
+                                <button type="submit" class="btn btn-danger">
+                                  Delete this card permanently
+                                </button>
+                                <a class="btn btn-secondary" href={cardsHref({ confirm: '' })}>
+                                  Keep it
+                                </a>
+                              </div>
+                            </form>
+                          ) : (
+                            <a
+                              class="btn btn-ghost"
+                              href={`${cardsHref({ project: card.projectSlug, confirm: card.cardKey })}#${id}`}
+                            >
+                              Delete this card<span class="sr-only"> {card.cardKey}</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </details>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      </>
+    )}
+  </main>
+</Layout>
