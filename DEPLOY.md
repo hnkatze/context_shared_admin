@@ -31,16 +31,21 @@ Three things that are load-bearing:
 - **Port 6543, the transaction-mode pooler — never 5432.** Vercel runs many isolated
   instances, each opening its own pool. The pool is capped at `max: 1` per instance for the
   same reason. A direct connection exhausts Postgres long before traffic does.
-- **Connect as `mcp_app`.** Supabase's default `postgres` role and `service_role` both carry
-  `BYPASSRLS`, which outranks `FORCE ROW LEVEL SECURITY`. Connect with either and every
-  tenancy policy becomes decoration while the app keeps working perfectly — the failure is
-  silent until a second organization exists.
+- **Connect as the dedicated application role.** On this Supabase project it is `context_app`
+  (the local Docker seed calls it `mcp_app` — verify, do not assume). What matters is the
+  privileges, and they were checked: `rolsuper = false`, `rolbypassrls = false`. Supabase's
+  default `postgres` role and `service_role` both carry `BYPASSRLS`, which outranks
+  `FORCE ROW LEVEL SECURITY`. Connect with either and every tenancy policy becomes decoration
+  while the app keeps working perfectly — the failure is silent until a second organization
+  exists. Confirm with:
+  `select rolname, rolsuper, rolbypassrls from pg_roles where rolname = current_user;`
 - The pooler username is the role name, a dot, then the project ref.
 
 ### `PANEL_ORG_ID`
 
-The `organizations.id` this deployment administers. **It is not the same value as your local
-`.env`**, which points at the throwaway Docker database.
+The `organizations.id` this deployment administers. Confirm which database your local `.env`
+points at before assuming this differs from it — the checked-in assumption that `.env` is the
+Docker instance has been wrong.
 
 `organizations` has `FORCE ROW LEVEL SECURITY`, so you cannot list it without already knowing
 the tenant. Resolve it through the `SECURITY DEFINER` function instead, with any active key
