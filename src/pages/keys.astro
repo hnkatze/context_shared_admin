@@ -1,0 +1,334 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { panelOrgId } from '../lib/db';
+import {
+  MAX_KEY_NAME_LENGTH,
+  checkKeyName,
+  findRevocationTarget,
+  issueApiKey,
+  listApiKeys,
+  revokeApiKey,
+  type ApiKeyRow,
+} from '../lib/apiKeys';
+
+/**
+ * One panel at a time. `issued` is the only state that must be rendered by the POST
+ * itself: a redirect after the insert would throw away the sole copy of the token.
+ */
+type Notice =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'issued'; readonly token: string; readonly name: string }
+  | { readonly kind: 'confirm'; readonly key: ApiKeyRow; readonly isLastActive: boolean }
+  | { readonly kind: 'revoked'; readonly name: string }
+  | { readonly kind: 'stale' };
+
+/** FormData yields `string | File`; a File reaching here is a forged request, not our form. */
+function textField(form: FormData, key: string): string | null {
+  const value = form.get(key);
+  return typeof value === 'string' ? value : null;
+}
+
+const describe = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const isoDay = (value: Date): string => value.toISOString().slice(0, 10);
+
+let failure: string | null = null;
+let formError: string | null = null;
+let submittedName = '';
+let notice: Notice = { kind: 'none' };
+let keys: readonly ApiKeyRow[] = [];
+
+let orgId: string | null = null;
+try {
+  orgId = await panelOrgId();
+} catch (error) {
+  failure = describe(error);
+}
+
+if (orgId !== null && Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = textField(form, 'intent');
+
+  if (intent === 'issue') {
+    const submitted = textField(form, 'name');
+    submittedName = submitted === null ? '' : submitted;
+    const check = checkKeyName(submitted);
+    if (!check.ok) {
+      formError = check.error;
+    } else {
+      try {
+        const issued = await issueApiKey(orgId, check.name);
+        notice = { kind: 'issued', token: issued.token, name: issued.name };
+        submittedName = '';
+        // The token lives in this response body and nowhere else; no cache may keep a copy.
+        Astro.response.headers.set('Cache-Control', 'no-store');
+      } catch (error) {
+        formError = describe(error);
+      }
+    }
+  } else if (intent === 'revoke') {
+    const id = textField(form, 'id') ?? '';
+    try {
+      const outcome = await revokeApiKey(orgId, id, textField(form, 'acknowledge') === 'lockout');
+      if (outcome.status === 'revoked') {
+        return Astro.redirect(`/keys?revoked=${encodeURIComponent(outcome.name)}`, 303);
+      }
+      if (outcome.status === 'needs-lockout-confirmation') {
+        return Astro.redirect(`/keys?confirm=${encodeURIComponent(id)}`, 303);
+      }
+      return Astro.redirect('/keys?stale=1', 303);
+    } catch (error) {
+      failure = describe(error);
+    }
+  }
+}
+
+if (orgId !== null && notice.kind === 'none') {
+  const confirmId = Astro.url.searchParams.get('confirm');
+  const revokedName = Astro.url.searchParams.get('revoked');
+  if (confirmId !== null) {
+    try {
+      const target = await findRevocationTarget(orgId, confirmId);
+      notice =
+        target.status === 'found'
+          ? { kind: 'confirm', key: target.key, isLastActive: target.isLastActive }
+          : { kind: 'stale' };
+    } catch (error) {
+      failure = describe(error);
+    }
+  } else if (revokedName !== null) {
+    notice = { kind: 'revoked', name: revokedName };
+  } else if (Astro.url.searchParams.get('stale') !== null) {
+    notice = { kind: 'stale' };
+  }
+}
+
+if (orgId !== null) {
+  try {
+    keys = await listApiKeys(orgId);
+  } catch (error) {
+    failure = describe(error);
+  }
+}
+
+// Narrowing a `let` across the template is fragile; freeze it once here.
+const panel = notice;
+
+const ALERT_STYLE =
+  'border:2px solid var(--color-accent-2);border-radius:var(--radius-lg);background:var(--color-surface);padding:var(--space-4);margin-bottom:var(--space-6)';
+const STATUS_STYLE =
+  'border:1px solid var(--color-divider);border-left:2px solid var(--color-accent);border-radius:var(--radius-md);background:var(--color-surface);padding:var(--space-3);margin-bottom:var(--space-6);font-size:14px';
+---
+
+<Layout title="API keys">
+  <main id="main" class="anim-view shell" style="padding-block:var(--space-8)">
+    <header style="margin-bottom:var(--space-6)">
+      <p class="eyebrow" style="font-family:var(--font-body)">Credentials</p>
+      <h1 class="display">API keys</h1>
+      <p class="text-muted" style="max-width:66ch;margin-top:var(--space-3)">
+        Only a SHA-256 hash is stored. A token is visible once, at creation, on this page
+        &mdash; and never again.
+      </p>
+    </header>
+
+    {failure !== null && (
+      <section role="alert" aria-labelledby="failure-heading" style={ALERT_STYLE}>
+        <h2 id="failure-heading" style="font-size:20px">Could not reach the board</h2>
+        <p class="mono" style="font-size:13px;overflow-wrap:anywhere;margin:0">{failure}</p>
+      </section>
+    )}
+
+    {panel.kind === 'issued' && (
+      <section role="alert" aria-labelledby="token-heading" class="anim-seal" style={ALERT_STYLE}>
+        <div style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-3)">
+          <h2 id="token-heading" style="font-size:25px;margin:0">Copy this token now</h2>
+          <span class="tag tag-accent-2">shown once</span>
+        </div>
+
+        <p style="margin:var(--space-3) 0 var(--space-2)">
+          Issued for <strong>{panel.name}</strong>. Paste it into that agent&rsquo;s secret store.
+        </p>
+
+        <code
+          class="mono"
+          style="display:block;padding:var(--space-3);margin-bottom:var(--space-3);font-size:14px;overflow-wrap:anywhere;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md)"
+        >{panel.token}</code>
+
+        <p style="max-width:70ch;font-size:14px">
+          Closing this panel, reloading, or navigating away destroys the only copy. There is no
+          recovery path &mdash; the hash cannot be reversed.
+        </p>
+
+        <a class="btn btn-secondary" href="/keys">I have stored it &mdash; back to the list</a>
+      </section>
+    )}
+
+    {panel.kind === 'confirm' && (
+      <section role="alert" aria-labelledby="revoke-heading" style={ALERT_STYLE}>
+        <h2 id="revoke-heading" style="font-size:25px;margin:0 0 var(--space-2)">
+          Revoke &ldquo;{panel.key.name}&rdquo;?
+        </h2>
+
+        {panel.isLastActive ? (
+          <p style="max-width:70ch">
+            <strong>This is the last active key.</strong> Revoking it locks this organization out
+            of the board completely: every agent holding it stops authenticating, and no agent can
+            mint a replacement &mdash; only this panel can.
+          </p>
+        ) : (
+          <p style="max-width:70ch">
+            The key stops authenticating immediately. It is not deleted: the row and its usage
+            history stay in the list, and nothing here can un-revoke it.
+          </p>
+        )}
+
+        <p class="text-muted" style="font-size:13px">
+          Prefix <span class="mono">{panel.key.key_prefix}&hellip;</span> &middot; issued
+          {' '}{isoDay(panel.key.created_at)} &middot;
+          {' '}{panel.key.last_used_at === null
+            ? 'never used'
+            : `last used ${isoDay(panel.key.last_used_at)}`}
+        </p>
+
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)">
+          <form method="POST" action="/keys">
+            <input type="hidden" name="intent" value="revoke" />
+            <input type="hidden" name="id" value={panel.key.id} />
+            {panel.isLastActive && <input type="hidden" name="acknowledge" value="lockout" />}
+            <button type="submit" class="btn btn-danger">
+              {panel.isLastActive ? 'Revoke anyway and lock the board' : 'Revoke this key'}
+            </button>
+          </form>
+          <a class="btn btn-secondary" href="/keys">Keep it</a>
+        </div>
+      </section>
+    )}
+
+    {panel.kind === 'revoked' && (
+      <p role="status" style={STATUS_STYLE}>
+        Revoked <strong>{panel.name}</strong>. It stays in the list below with its history.
+      </p>
+    )}
+
+    {panel.kind === 'stale' && (
+      <p role="status" style={STATUS_STYLE}>
+        That key is no longer active &mdash; it was revoked already, or it does not belong to this
+        organization.
+      </p>
+    )}
+
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--space-8)">
+      <section aria-labelledby="issued-heading" style="flex:1 1 560px;min-width:0">
+        <h2 id="issued-heading" class="eyebrow" style="font-family:var(--font-body)">Issued keys</h2>
+
+        {keys.length === 0 ? (
+          <p class="text-muted" style="font-size:14px">
+            No keys yet. Until one exists, no agent can reach the board.
+          </p>
+        ) : (
+          <table class="table">
+            <caption class="sr-only">API keys for this organization, active ones first</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Prefix</th>
+                <th scope="col">Last used</th>
+                <th scope="col">Status</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.map((key) => (
+                <tr>
+                  <td>
+                    <span style="font-weight:500">{key.name}</span>
+                    <span class="text-muted" style="display:block;font-size:12px">
+                      created <time datetime={key.created_at.toISOString()}>{isoDay(key.created_at)}</time>
+                    </span>
+                  </td>
+                  <td class="mono" style="font-size:13px;white-space:nowrap">
+                    {key.key_prefix}&hellip;
+                  </td>
+                  <td style="font-size:13px;white-space:nowrap">
+                    {key.last_used_at === null ? (
+                      <span class="text-muted">never used</span>
+                    ) : (
+                      <time datetime={key.last_used_at.toISOString()}>{isoDay(key.last_used_at)}</time>
+                    )}
+                  </td>
+                  <td>
+                    {key.revoked_at === null ? (
+                      <span class="tag tag-accent">active</span>
+                    ) : (
+                      <span class="tag tag-neutral">revoked</span>
+                    )}
+                  </td>
+                  <td style="text-align:right;white-space:nowrap">
+                    {key.revoked_at === null ? (
+                      <a class="btn btn-ghost" href={`/keys?confirm=${key.id}`}>
+                        Revoke<span class="sr-only"> {key.name}</span>
+                      </a>
+                    ) : (
+                      <span class="text-muted" style="font-size:12px">
+                        revoked {isoDay(key.revoked_at)}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <p class="text-muted" style="max-width:70ch;margin-top:var(--space-3);font-size:13px">
+          A key that has never been used is not missing data &mdash; it means the agent it was
+          minted for has not connected yet.
+        </p>
+      </section>
+
+      <aside
+        aria-labelledby="issue-heading"
+        style="flex:0 1 300px;min-width:260px;border-left:2px solid var(--color-accent);padding-left:var(--space-4)"
+      >
+        <h2 id="issue-heading" class="eyebrow" style="font-family:var(--font-body)">Issue a key</h2>
+
+        <form method="POST" action="/keys">
+          <input type="hidden" name="intent" value="issue" />
+
+          {formError !== null && (
+            <p
+              id="name-error"
+              role="alert"
+              style="font-size:13px;padding:var(--space-2);margin-bottom:var(--space-3);color:var(--color-accent-2-800);background:var(--color-accent-2-100);border:1px solid var(--color-accent-2-300);border-radius:var(--radius-md)"
+            >
+              {formError}
+            </p>
+          )}
+
+          <div class="field">
+            <label for="key-name">Name it after the agent that will hold it</label>
+            <input
+              id="key-name"
+              class="input"
+              type="text"
+              name="name"
+              required
+              maxlength={MAX_KEY_NAME_LENGTH}
+              value={submittedName}
+              placeholder="frontend-agent staging"
+              aria-describedby={formError !== null ? 'name-error key-name-hint' : 'key-name-hint'}
+              aria-invalid={formError !== null ? 'true' : undefined}
+            />
+            <p id="key-name-hint" class="text-muted" style="font-size:12px;margin:var(--space-1) 0 0">
+              Up to {MAX_KEY_NAME_LENGTH} characters. It labels the row here; the agent never sees
+              it.
+            </p>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block">Issue key</button>
+        </form>
+      </aside>
+    </div>
+  </main>
+</Layout>
